@@ -1,0 +1,175 @@
+---
+jupyter:
+  jupytext:
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.1'
+      jupytext_version: 1.2.3
+  kernelspec:
+    display_name: Python 3
+    language: python
+    name: python3
+---
+
+```{python}
+# %autosave 0
+from __future__ import (absolute_import, division, print_function,
+                        unicode_literals)
+
+import datetime  # For datetime objects
+import os.path  # To manage paths
+import sys  # To find out the script name (in argv[0])
+
+# Import the backtrader platform
+import backtrader as bt
+```
+
+```{python}
+# Create Buy And Hold Stratey 
+class BAHStrategy(bt.Strategy):
+    params = (
+        ('weights', []),
+        ('printlog', False),
+    )
+
+
+    def log(self, txt, dt=None, doprint=False):
+        ''' Logging function for this strategy'''
+        if self.params.printlog or doprint:
+            dt = dt or self.datas[0].datetime.date(0)
+        print('%s, %s' % (dt.isoformat(), txt))
+
+    def __init__(self):
+
+        # To keep track of pending orders
+        self.o = dict()  # orders per data (main, stop, limit, manual-close)
+
+
+    def nextstart(self):
+        cash = self.broker.getvalue()
+        for i, d in enumerate(self.datas):
+            if i < len(self.params.weights):
+                # Simply log the closing price of the series from the reference
+                self.log('Buying Price, %d, %.2f' % (i, d.close[0]))
+                self.o[d] = [self.buy(data = d, size = (cash * self.params.weights[i]) // d.close[0])] 
+
+            
+    def notify_order(self, order):
+        if order.status == order.Submitted:
+            return
+
+        dt, dn = self.datetime.date(), order.data._name
+        print('{} {} Order {} Status {}'.format(dt, dn, order.ref, order.getstatusname()))
+
+        whichord = ['main', 'stop', 'limit', 'close']
+        if not order.alive():  # not alive - nullify
+            dorders = self.o[order.data]
+            idx = dorders.index(order)
+            dorders[idx] = None
+            #print('-- No longer alive {} Ref'.format(whichord[idx]))
+
+            if all(x is None for x in dorders):
+                dorders[:] = []  # empty list - New orders allowed
+
+
+    def notify_trade(self, trade):
+        if not trade.isclosed:
+            return
+
+        self.log('TRADE CLOSED, GROSS %.2f, NET %.2f' %
+                 (trade.pnl, trade.pnlcomm), doprint=True)
+
+
+    def stop(self):
+        for i, d in enumerate(self.datas):
+            # Simply log the closing price of the series from the reference
+            self.log('Ending Price, %d, %.2f' % (i, d.close[0]))
+        self.log('Ending Value %.2f' %(self.broker.getvalue()), doprint=True)
+
+
+```
+
+```{python}
+    cerebro = bt.Cerebro(stdstats=False)
+
+    portfolio = ['DMART','GRUH','PAGEIND','ASIANPAINT','PIDILITIND','3MINDIA','NAUKRI','HDFCBANK','NESTLEIND','DRREDDY','BAJFINANCE']
+    
+    dirname = '../QualityPortfolio'
+    
+    # Add a strategy
+    cerebro.addstrategy(BAHStrategy, weights = [0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.05,0.05],
+                                     printlog = True)
+    #cerebro.addanalyzer(bt.analyzers.PyFolio, _name='pyfolio')
+    cerebro.addanalyzer(bt.analyzers.TimeReturn, timeframe=bt.TimeFrame.Years)
+    cerebro.addanalyzer(bt.analyzers.TimeDrawDown)
+
+    for symbol in portfolio:
+        filename = dirname + '/' + symbol + '.csv'
+        fromdate = datetime.datetime(2019, 3, 31)
+        todate=datetime.datetime(2019, 8, 31)
+
+        data = bt.feeds.GenericCSVData(
+            dataname=os.path.abspath(filename),
+            fromdate=fromdate,todate=todate,
+            nullvalue=0.0,dtformat=('%Y-%m-%d'),datetime=0,
+            high=1,low=2,open=3,close=4,volume=5, openinterest=-1
+        )
+        data.plotinfo.plot = False
+        cerebro.adddata(data)
+        
+    benchmarkfile = dirname + '/NIFTY500.csv'
+    benchmarkdata = bt.feeds.GenericCSVData(
+            dataname=os.path.abspath(benchmarkfile),
+            fromdate=fromdate,todate=todate,
+            nullvalue=0.0,dtformat=('%Y-%m-%d'),datetime=0,
+            high=1,low=2,open=3,close=4,volume=5, openinterest=-1
+        )
+    cerebro.adddata(benchmarkdata)
+    cerebro.addanalyzer(bt.analyzers.TimeReturn, timeframe=bt.TimeFrame.Years,
+                    data=benchmarkdata, _name='benchmarkreturns')
+    cerebro.addobserver(bt.observers.Benchmark, data = benchmarkdata)
+    
+    cerebro.addobserver(bt.observers.Broker)
+    cerebro.addobserver(bt.observers.DrawDown)
+
+    # Set our desired cash start
+    cerebro.broker.setcash(1000000.0)
+
+    # Set the commission
+    cerebro.broker.setcommission(commission=0.001)
+
+    # Print out the starting conditions
+    print('Starting Portfolio Value: %.2f' % cerebro.broker.getvalue())
+
+    # Run over everything
+    strats = cerebro.run()
+    strat0 = strats[0]
+
+    # Print out the final result
+    print('Final Portfolio Value: %.2f' % cerebro.broker.getvalue())
+
+    tret_analyzer = strat0.analyzers.getbyname('timereturn')
+    tret = tret_analyzer.get_analysis()
+    bret_analyzer = strat0.analyzers.getbyname('benchmarkreturns')
+    bret = bret_analyzer.get_analysis()
+    tdrawdown_analyzer = strat0.analyzers.getbyname('timedrawdown')
+    tdrawdown = tdrawdown_analyzer.get_analysis()
+
+```
+
+```{python}
+import json
+from IPython.display import HTML, display
+import tabulate
+retTable = [["Year", "Return", "Benchmark Return"]]
+for date in tret:
+    retTable.append(("%s \t %.2f%% \t %.2f%%" % (date.strftime('%Y'), 100*tret[date], 100*bret[date])).split('\t'))
+display(HTML(tabulate.tabulate(retTable, tablefmt='html')))
+print(json.dumps(tdrawdown, indent = 4))
+cerebro.plot()
+```
+
+```{python}
+
+```
