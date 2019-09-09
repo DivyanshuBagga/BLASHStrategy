@@ -20,6 +20,7 @@ from __future__ import (absolute_import, division, print_function,
 import datetime  # For datetime objects
 import os.path  # To manage paths
 import sys  # To find out the script name (in argv[0])
+import pandas as pd
 
 # Import the backtrader platform
 import backtrader as bt
@@ -134,14 +135,12 @@ class BLASHStrategy(bt.Strategy):
 
     portfolio = ['DMART','GRUH','PAGEIND','ASIANPAINT','PIDILITIND','3MINDIA','NAUKRI','HDFCBANK','NESTLEIND','DRREDDY','BAJFINANCE']
     
-    dirname = '../QualityPortfolio'
+    dirname = '.'
     
     # Add a strategy
     cerebro.addstrategy(BLASHStrategy, weights = [0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.05,0.05],
-                                     steps = 10, printlog = True)
-    #cerebro.addanalyzer(bt.analyzers.PyFolio, _name='pyfolio')
-    cerebro.addanalyzer(bt.analyzers.TimeReturn, timeframe=bt.TimeFrame.Years)
-    cerebro.addanalyzer(bt.analyzers.TimeDrawDown)
+                                     steps = 5, printlog = True)
+    cerebro.addanalyzer(bt.analyzers.PyFolio, _name='pyfolio')
 
     for symbol in portfolio:
         filename = dirname + '/' + symbol + '.csv'
@@ -156,8 +155,9 @@ class BLASHStrategy(bt.Strategy):
         )
         data.plotinfo.plot = False
         cerebro.adddata(data)
-        
-    benchmarkfile = dirname + '/NIFTY500.csv'
+
+    benchmarkSymbol = 'NIFTY500'
+    benchmarkfile = dirname + '/' + benchmarkSymbol + '.csv'
     benchmarkdata = bt.feeds.GenericCSVData(
             dataname=os.path.abspath(benchmarkfile),
             fromdate=fromdate,todate=todate,
@@ -165,12 +165,7 @@ class BLASHStrategy(bt.Strategy):
             high=1,low=2,open=3,close=4,volume=5, openinterest=-1
         )
     cerebro.adddata(benchmarkdata)
-    cerebro.addanalyzer(bt.analyzers.TimeReturn, timeframe=bt.TimeFrame.Years,
-                    data=benchmarkdata, _name='benchmarkreturns')
-    cerebro.addobserver(bt.observers.Benchmark, data = benchmarkdata)
-    
-    cerebro.addobserver(bt.observers.Broker)
-    cerebro.addobserver(bt.observers.DrawDown)
+    cerebro.addanalyzer(bt.analyzers.TimeReturn, data=benchmarkdata, _name='benchmarkreturns')
 
     # Set our desired cash start
     cerebro.broker.setcash(1000000.0)
@@ -184,42 +179,30 @@ class BLASHStrategy(bt.Strategy):
     # Run over everything
     strats = cerebro.run()
     strat0 = strats[0]
+    breturns = strat0.analyzers.benchmarkreturns.get_analysis()
+    breturns = pd.DataFrame.from_dict(breturns, orient = 'index', columns = ['Returns'])
+    breturns = pd.Series(breturns['Returns'].values, index = breturns.index)
+    breturns = breturns.tz_localize('UTC')
 
     # Print out the final result
     print('Final Portfolio Value: %.2f' % cerebro.broker.getvalue())
 
-    # Plot the result
-    #pyfoliozer = strat0.analyzers.getbyname('pyfolio')
-    #returns, positions, transactions, gross_lev = pyfoliozer.get_pf_items()
-    
-    # pyfolio showtime
-    #import pyfolio as pf
-    #pf.create_full_tear_sheet(
-    #    returns,
-    #    positions=positions,
-    #    transactions=transactions,
-    #    live_start_date='2017-04-01')  # This date is sample specific
-
-    tret_analyzer = strat0.analyzers.getbyname('timereturn')
-    tret = tret_analyzer.get_analysis()
-    bret_analyzer = strat0.analyzers.getbyname('benchmarkreturns')
-    bret = bret_analyzer.get_analysis()
-    tdrawdown_analyzer = strat0.analyzers.getbyname('timedrawdown')
-    tdrawdown = tdrawdown_analyzer.get_analysis()
-    
 
 ```
 
 ```{python}
-import json
-from IPython.display import HTML, display
-import tabulate
-retTable = [["Year", "Return", "Benchmark Return"]]
-for date in tret:
-    retTable.append(("%s \t %.2f%% \t %.2f%%" % (date.strftime('%Y'), 100*tret[date], 100*bret[date])).split('\t'))
-display(HTML(tabulate.tabulate(retTable, tablefmt='html')))
-print(json.dumps(tdrawdown, indent = 4))
-cerebro.plot()
+    # Plot the result
+    pyfoliozer = strat0.analyzers.getbyname('pyfolio')
+    returns, positions, transactions, gross_lev = pyfoliozer.get_pf_items()
+    
+    # pyfolio showtime
+    import pyfolio as pf
+    pf.create_full_tear_sheet(
+        returns,
+        benchmark_rets=breturns,
+        positions=positions,
+        transactions=transactions)
+
 ```
 
 ```{python}
